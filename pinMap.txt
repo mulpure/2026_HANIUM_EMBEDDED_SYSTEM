@@ -1,0 +1,59 @@
+[NAVCANE 핀 설정]
+
+■ ESP32 I2C
+SDA : GPIO 21
+SCL : GPIO 22
+
+연결 센서
+- MPU6050
+- VL53L5CX
+- VL53L1X
+
+
+■ ToF 센서
+
+[VL53L5CX]
+SDA : GPIO 21
+SCL : GPIO 22
+LPn : GPIO 25
+I2C 주소 : 0x29
+
+[VL53L1X]
+SDA : GPIO 21
+SCL : GPIO 22
+XSHUT : 사용 안 함
+I2C 주소 : 0x30
+
+
+■ MPU6050
+SDA : GPIO 21
+SCL : GPIO 22
+I2C 주소 : 0x68
+
+
+■ Raspberry Pi 5 ↔ ESP32 UART
+
+[ESP32 UART2]
+RX : GPIO 16
+TX : GPIO 17
+Baud Rate : 115200
+
+연결
+ESP32 RX(GPIO16) ← Raspberry Pi TX
+ESP32 TX(GPIO17) → Raspberry Pi RX
+GND ↔ GND
+
+
+■ 버튼
+BUTTON : GPIO 33
+설정 : INPUT_PULLUP
+
+
+■ 진동모터
+VIBRATION MOTOR : GPIO 32
+
+
+■ 현재 미사용
+VL53L1X XSHUT : 사용 안 함
+초음파 센서 TRIG/ECHO : 사용 안 함
+(HC-SR04 대신 VL53L1X 사용)
