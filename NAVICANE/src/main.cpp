@@ -12,6 +12,13 @@
   통신 방식 : Bluetooth Low Energy (웹페이지) + UART2 115200bps (Pi5)
   장치 이름 : NAVCANE_ESP32
 
+  [FINAL v8 핵심 - 재결합 순간의 0x29 충돌 자체를 예방]
+    - VL53L1X 분리 감지 즉시 VL53L5CX LPn(GPIO25)을 LOW로 유지.
+    - 계단 센서가 빠져 있는 동안 VL53L5CX I2C 접근/장애물 감지는 일시 중지.
+    - VL53L1X 재결합 시 0x29에서 단독으로 소프트리셋/초기화 후 0x30으로 재할당.
+    - VL53L1X가 0x30에 정상 복구된 것을 확인한 뒤에만 VL53L5CX LPn HIGH.
+    - XSHUT/별도 삽입 감지 핀 없이 hot-plug 시 0x29 충돌을 예방하기 위한 안전 우선 방식.
+
   [이번 수정 내용 - 장애물 감지용 좌/우 진동모터 분리 + 거리 기반 가변 속도]
     - 기존에는 장애물(좌/우/양쪽)도 낙상/계단/초록불과 같은 메인 진동모터(GPIO32)를
       패턴(leftPattern/rightPattern/bothPattern)으로 공유해서 울렸음.
@@ -32,7 +39,22 @@
       선형 보간(linear interpolation)으로 거리에 따라 주기를 계산하고, millis() 기반
       비블로킹 토글로 구현했기 때문에 loop() 다른 처리들을 막지 않음.
 
-  [이전 수정 내용 - VL53L1X 소프트웨어 리셋 도입 관련 부분은 원본과 동일, 생략 없이 유지]
+  [이번 추가 수정 - 분절형 포고핀 Hot-plug 자동 복구]
+     - FINAL_v2: 0x29/0x30 ACK만으로 VL53L1X 존재를 단정하지 않고,
+       ST 식별 레지스터 0x010F~0x0111(Model ID 0xEA / Module Type 0xCC)를 직접 확인한 뒤에만
+       VL53L1X로 인정. 다른 장치/잔여 ACK를 VL53L1X로 오인하는 문제 방지.
+     - ID가 확인되지 않은 실패에서는 VL53L5CX LPn을 반드시 다시 HIGH로 복귀.
+       실제 VL53L1X가 0x29에 있다고 ID까지 확인된 상태에서 초기화가 실패한 경우에만
+       주소 충돌 방지를 위해 VL53L5CX를 일시 격리한 채 재시도.
+     - MPU6050 / VL53L1X가 빠져도 ESP32 전체를 while(1)로 정지시키지 않음
+     - MPU6050 재결합 시 begin() + 측정 범위/필터 자동 재설정
+     - VL53L1X 재결합 시 VL53L5CX LPn(GPIO25)을 잠시 LOW로 만들어 0x29 충돌 제거
+       후 VL53L1X를 0x29 -> 0x30으로 재할당하고 ranging 자동 재시작
+     - VL53L5CX LPn은 I2C 통신만 잠시 차단하는 용도로 사용. 재결합 시 0x29 충돌을 먼저 제거한 뒤
+       통신을 복구하고, 프레임이 돌아오지 않을 때만 stop/start -> begin() 전체 재초기화를 fallback으로 수행
+     - I2C bus recovery는 단순 센서 미연결에는 실행하지 않고, SDA가 실제 LOW에 고착됐을 때만
+       SCL 9펄스 + STOP 조건으로 복구 시도
+     - BLE LED 핀은 최종 배선에 맞춰 GPIO2로 고정
 */
 
 #include <Wire.h>
@@ -64,11 +86,8 @@
 // 핀 설정
 // ======================================================
 
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 27
-#endif
-
-const int LED_PIN = LED_BUILTIN;
+// BLE 명령용 LED - 최종 배선에 맞춰 GPIO2로 고정
+#define LED_PIN 2
 
 // 센서를 연결할 아날로그 입력 핀 (기존 예제용, 필요 없으면 무시)
 const int SENSOR_PIN = 34;
@@ -84,8 +103,11 @@ const int SENSOR_PIN = 34;
 #define VL53L5CX_LPN_PIN 25       // 부팅 시 순차 초기화용 - active-low 비활성화 핀 (기본 주소 0x29 그대로 사용)
 
 // VL53L1X (하향 장착, 계단 감지용 - 구 HC-SR04 자리)
-#define VL53L1X_NEW_ADDR  0x60    // SparkFun 라이브러리 값 0x60 = 실제 7비트 I2C 주소 0x30
-// ※ XSHUT은 여전히 3.3V 하드와이어 그대로 사용 (추가 GPIO 불필요)
+#define VL53L1X_NEW_ADDR         0x60  // SparkFun 라이브러리용 8비트 주소값 -> 실제 7비트 0x30
+#define VL53L1X_DEFAULT_ADDR_7   0x29  // 전원 재인가 후 기본 7비트 주소
+#define VL53L1X_NEW_ADDR_7       0x30  // 평상시 실제 7비트 주소
+#define MPU6050_ADDR_7           0x68
+// ※ XSHUT은 3.3V 하드와이어 그대로 사용. Hot-plug 복구는 VL53L5CX LPn(GPIO25)로 주소 충돌을 피해서 수행.
 
 // YOLO 세션 진행 표시 LED (Pi5가 "YOLO_ON"/"YOLO_OFF" 보내면 켜짐/꺼짐)
 #define YOLO_LED_PIN 27
@@ -141,6 +163,7 @@ int TOF_ROW_MAX = 2;
 
 SparkFun_VL53L5CX tof;
 uint8_t tofZones = 0;
+bool tofReady = false;
 
 float tofFilterBufLeft[TOF_FILTER_SAMPLES]  = { -1, -1, -1 };
 int   tofFilterIdxLeft  = 0;
@@ -187,7 +210,53 @@ float lastStairDistanceCM = -1.0f;
 int   stairOverCount = 0;
 bool  stairAlertActive = false;
 
-SFEVL53L1X stairSensor;
+SFEVL53L1X* stairSensor = nullptr;
+bool stairSensorReady = false;
+
+// ======================================================
+// 분절형 포고핀 Hot-plug 감시/복구 설정
+// ======================================================
+
+#define I2C_SDA_PIN 21
+#define I2C_SCL_PIN 22
+
+const unsigned long SENSOR_HEALTH_CHECK_INTERVAL_MS = 500;
+const unsigned long STAIR_RECOVERY_RETRY_INTERVAL_MS = 7000;
+const unsigned long STAIR_RECONNECT_SETTLE_MS = 3000;       // 재결합 후 최소 안정화 대기
+const unsigned long STAIR_ADDR_SAMPLE_INTERVAL_MS = 400;   // 주소 관찰 간격
+const uint8_t STAIR_ADDR_STABLE_REQUIRED = 5;              // 같은 주소 5회 연속 확인
+const unsigned long TOF_NO_FRAME_TIMEOUT_MS = 2000;
+const unsigned long TOF_RECOVERY_RETRY_INTERVAL_MS = 3000;
+const uint8_t SENSOR_MISS_LIMIT = 2;
+
+unsigned long lastSensorHealthCheckTime = 0;
+unsigned long lastStairRecoveryAttemptTime = 0;
+unsigned long stairDisconnectedAtTime = 0;
+unsigned long stairLastAddressSampleTime = 0;
+unsigned long stairRecoveryCooldownUntil = 0;
+uint8_t stairStable29Count = 0;
+uint8_t stairStable30Count = 0;
+unsigned long lastTofRecoveryAttemptTime = 0;
+unsigned long lastTofFrameTime = 0;
+
+uint8_t mpuMissCount = 0;
+uint8_t stairMissCount = 0;
+uint8_t tofMissCount = 0;
+
+// true면 VL53L5CX LPn을 LOW로 유지하여 0x29에서 I2C 충돌이 나지 않게 격리한 상태
+bool tofCommsIsolated = false;
+
+enum StairInitResult
+{
+  STAIR_INIT_ABSENT,
+  STAIR_INIT_OK,
+  // VL53L1X ID가 실제 0x29에서 확인됐지만 초기화/주소변경에 실패한 상태.
+  // 이 경우에만 VL53L5CX를 HIGH로 올리면 0x29 주소 충돌이 생길 수 있다.
+  STAIR_INIT_VERIFIED_AT_29_BUT_FAILED,
+  // VL53L1X는 확인됐거나 초기화 시도가 필요했지만 현재 0x29 충돌은 확인되지 않은 실패.
+  // VL53L5CX는 다시 HIGH로 복귀시켜도 된다.
+  STAIR_INIT_FAILED_NO_CONFLICT
+};
 
 // ======================================================
 // BLE 객체 및 상태 변수
@@ -207,6 +276,7 @@ unsigned long previousSendTime = 0;
 // ======================================================
 
 Adafruit_MPU6050 mpu;
+bool mpuReady = false;
 
 enum FallState { IDLE, FREEFALL, IMPACT, STILLNESS_CHECK };
 FallState fallState = IDLE;
@@ -434,6 +504,800 @@ void stopObstacleMotors()
 }
 
 // ======================================================
+// 분절형 포고핀 Hot-plug 복구 보조 함수 - 최종 버전
+//
+// 핵심 원칙
+//   1) 센서가 빠져도 ESP32 전체를 멈추지 않는다.
+//   2) MPU6050은 0x68 고정 주소이므로 독립적으로 복구한다.
+//   3) VL53L1X는 전원 재인가 시 0x29로 돌아오므로,
+//      VL53L5CX의 LPn(GPIO25)을 먼저 LOW로 내려 0x29 충돌을 없앤 후 0x30으로 재할당한다.
+//   4) VL53L5CX LPn은 I2C 통신을 가리는 용도로만 사용한다.
+//      hot-plug 순간에는 이미 VL53L1X가 0x29로 들어와 충돌했을 수 있으므로
+//      stopRanging()을 LPn LOW보다 먼저 호출하지 않는다.
+//   5) VL53L5CX가 이후 프레임을 못 내보낼 때만 stop/start를 시도하고,
+//      그래도 실패하면 begin() 전체 초기화를 fallback으로 사용한다.
+//   6) I2C bus recovery는 "센서가 없다"는 이유만으로 실행하지 않는다.
+//      SDA가 실제 LOW에 고착된 경우에만 SCL 9펄스 + STOP 조건을 만들어 복구한다.
+// ======================================================
+
+bool i2cDevicePresent(uint8_t address7)
+{
+  Wire.beginTransmission(address7);
+  return (Wire.endTransmission() == 0);
+}
+
+bool isI2CBusStuckLow()
+{
+  // I2C transaction이 없는 health-check/recovery 구간에서 호출한다.
+  // SDA가 계속 LOW면 slave가 transaction 도중 멈춘 bus-stuck 가능성이 높다.
+  return (digitalRead(I2C_SDA_PIN) == LOW);
+}
+
+bool recoverI2CBusIfStuck()
+{
+  if (!isI2CBusStuckLow())
+  {
+    return false; // 단순 센서 미연결에는 버스 리셋을 하지 않음
+  }
+
+  Serial.println("[I2C 복구] SDA LOW 고착 감지 -> SCL 9펄스 + STOP 복구 시도");
+
+  Wire.end();
+
+  // ESP32 전용 open-drain 출력. HIGH를 쓰면 라인을 release하고 LOW를 쓰면 당긴다.
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  pinMode(I2C_SCL_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SCL_PIN, HIGH);
+  delayMicroseconds(10);
+
+  for (int i = 0; i < 9 && digitalRead(I2C_SDA_PIN) == LOW; i++)
+  {
+    digitalWrite(I2C_SCL_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL_PIN, HIGH);
+    delayMicroseconds(5);
+  }
+
+  // STOP condition: SCL HIGH인 상태에서 SDA LOW -> HIGH
+  pinMode(I2C_SDA_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SDA_PIN, LOW);
+  delayMicroseconds(5);
+  digitalWrite(I2C_SCL_PIN, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(I2C_SDA_PIN, HIGH);
+  delayMicroseconds(10);
+
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  bool released = (digitalRead(I2C_SDA_PIN) == HIGH);
+
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(tofReady ? 400000 : 100000);
+  delay(30);
+
+  if (released)
+  {
+    Serial.println("[I2C 복구] SDA 해제 성공, Wire 재시작 완료");
+  }
+  else
+  {
+    Serial.println("[I2C 복구] SDA가 여전히 LOW -> 물리 접점/전원/센서 상태 확인 필요");
+  }
+
+  return released;
+}
+
+// VL53L1X 주소 레지스터(0x0001)에 실제 7비트 주소값을 직접 기록한다.
+// ESP32만 재부팅되고 VL53L1X 전원은 유지되어 0x30에 남아 있을 때,
+// 새 SparkFun 객체가 기본주소 0x29부터 다시 초기화할 수 있게 되돌리는 용도다.
+bool writeVL53L1XRegister8(uint8_t deviceAddress7, uint16_t reg, uint8_t value)
+{
+  Wire.beginTransmission(deviceAddress7);
+  Wire.write((uint8_t)(reg >> 8));
+  Wire.write((uint8_t)(reg & 0xFF));
+  Wire.write(value);
+  return (Wire.endTransmission() == 0);
+}
+
+
+// VL53L1X Hot-plug 판별은 raw ID 레지스터를 직접 읽지 않는다.
+// SparkFun SFEVL53L1X::begin() 자체가 내부에서 checkID()를 수행한 뒤
+// VL53L1X_SensorInit()까지 실행한다.
+// 이 코드에서는 VL53L5CX를 LPn LOW로 먼저 격리한 뒤 새 SFEVL53L1X 객체의
+// begin() 성공 여부를 실제 VL53L1X 존재/초기화 판정으로 사용한다.
+
+void resetStairDetectionState()
+{
+  lastStairDistanceCM = -1.0f;
+  stairOverCount = 0;
+  stairAlertActive = false;
+  stairFilterIdx = 0;
+
+  for (int i = 0; i < STAIR_FILTER_SAMPLES; i++)
+  {
+    stairFilterBuf[i] = -1.0f;
+  }
+}
+
+void resetObstacleDetectionState()
+{
+  lastDistanceCM = -1.0f;
+  obstacleSide = OBSTACLE_NONE;
+  tofFilterIdxLeft = 0;
+  tofFilterIdxRight = 0;
+
+  for (int i = 0; i < TOF_FILTER_SAMPLES; i++)
+  {
+    tofFilterBufLeft[i] = -1.0f;
+    tofFilterBufRight[i] = -1.0f;
+  }
+
+  stopObstacleMotors();
+}
+
+void markMPUDisconnected()
+{
+  if (!mpuReady) return;
+
+  mpuReady = false;
+  mpuMissCount = 0;
+  fallState = IDLE;
+  lastAccelMag = 0.0f;
+
+  Serial.println("[HOTPLUG] MPU6050 분리 감지 -> 낙상 감지만 일시 중지");
+}
+
+bool initializeMPU6050HotPlug()
+{
+  if (!i2cDevicePresent(MPU6050_ADDR_7))
+  {
+    return false;
+  }
+
+  // MPU 초기화는 100kHz에서 하고, VL53L5CX가 살아 있으면 다시 400kHz로 복귀한다.
+  Wire.setClock(100000);
+
+  if (!mpu.begin())
+  {
+    if (tofReady) Wire.setClock(400000);
+    return false;
+  }
+
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
+
+  if (tofReady) Wire.setClock(400000);
+
+  mpuReady = true;
+  mpuMissCount = 0;
+  fallState = IDLE;
+  lastAccelMag = 0.0f;
+
+  Serial.println("[HOTPLUG] MPU6050 초기화/복구 완료 (0x68)");
+  return true;
+}
+
+void destroyStairSensorObject()
+{
+  if (stairSensor != nullptr)
+  {
+    delete stairSensor;
+    stairSensor = nullptr;
+  }
+}
+
+// 반드시 VL53L5CX의 LPn(GPIO25)이 LOW인 상태에서 호출한다.
+// 이 상태에서는 0x29에 VL53L1X만 존재할 수 있으므로 안전하게 0x30으로 재할당할 수 있다.
+// ESP32 I2C 컨트롤러만 깨끗하게 재시작한다.
+// 센서 전원/주소는 직접 건드리지 않는다.
+void restartI2CControllerForHotPlug()
+{
+  Wire.end();
+  delay(20);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(100000);
+  delay(250);
+}
+
+void resetStairAddressObservation()
+{
+  stairStable29Count = 0;
+  stairStable30Count = 0;
+  stairLastAddressSampleTime = 0;
+}
+
+StairInitResult initializeVL53L1XWithL5Disabled()
+{
+  stairSensorReady = false;
+  resetStairDetectionState();
+  destroyStairSensorObject();
+
+  Wire.setClock(100000);
+
+  // 포고핀 재결합 직후에는 충분히 기다린다.
+  delay(1000);
+
+  bool ackAt29 = i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7);
+  bool ackAt30 = i2cDevicePresent(VL53L1X_NEW_ADDR_7);
+
+  Serial.printf("[HOTPLUG] 주소 스캔 참고값: 0x29=%s, 0x30=%s\n",
+                ackAt29 ? "ACK" : "NONE",
+                ackAt30 ? "ACK" : "NONE");
+
+  // ====================================================
+  // v8 핵심:
+  // 스캔에서 0x30이 안 잡혀도 먼저 0x30 직접 접속을 시도한다.
+  //
+  // 네 기존 정상 코드의 fallback:
+  //   stairSensor.setI2CAddress(VL53L1X_NEW_ADDR);
+  //   if (stairSensor.checkID()) {
+  //       stairSensor.init();
+  //   }
+  //
+  // SparkFun 객체 내부 통신 주소를 0x30으로 맞춘 뒤 checkID()를 직접 수행한다.
+  // 따라서 단순 Wire ACK 스캔 결과에만 의존하지 않는다.
+  // ====================================================
+  Serial.println("[HOTPLUG] 1순위: 스캔 결과와 무관하게 VL53L1X 0x30 직접 접속 시도");
+
+  stairSensor = new SFEVL53L1X();
+
+  if (stairSensor == nullptr)
+  {
+    Serial.println("[HOTPLUG] VL53L1X 객체 메모리 할당 실패");
+    return STAIR_INIT_FAILED_NO_CONFLICT;
+  }
+
+  // 기존 정상 코드와 동일한 방법으로 객체의 대상 주소를 0x30으로 맞춤
+  stairSensor->setI2CAddress(VL53L1X_NEW_ADDR);
+  delay(100);
+
+  if (stairSensor->checkID())
+  {
+    Serial.println("[HOTPLUG] VL53L1X 0x30 직접 checkID() 성공");
+
+    int initResult = (int)stairSensor->init();
+
+    if (initResult == 0)
+    {
+      stairSensor->setDistanceModeShort();
+      stairSensor->setTimingBudgetInMs(50);
+      stairSensor->setIntermeasurementPeriod(HCSR04_SAMPLE_INTERVAL);
+      stairSensor->startRanging();
+
+      resetStairDetectionState();
+      stairSensorReady = true;
+      stairMissCount = 0;
+
+      Serial.println("[HOTPLUG] VL53L1X 0x30 직접 복구 성공");
+      return STAIR_INIT_OK;
+    }
+
+    Serial.printf("[HOTPLUG] VL53L1X 0x30 checkID 성공했지만 init() 실패: %d\n",
+                  initResult);
+  }
+  else
+  {
+    Serial.println("[HOTPLUG] VL53L1X 0x30 직접 checkID() 실패");
+  }
+
+  destroyStairSensorObject();
+
+  // ====================================================
+  // 2순위: 0x30 직접 접속이 실패했을 때만 0x29 경로 시도
+  //
+  // VL53L5CX는 LPn LOW 상태이므로 정상이라면 0x29에는
+  // 재부팅된 VL53L1X만 남아 있어야 한다.
+  // ====================================================
+  delay(250);
+
+  ackAt29 = i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7);
+  ackAt30 = i2cDevicePresent(VL53L1X_NEW_ADDR_7);
+
+  Serial.printf("[HOTPLUG] 0x30 직접 접속 실패 후 재확인: 0x29=%s, 0x30=%s\n",
+                ackAt29 ? "ACK" : "NONE",
+                ackAt30 ? "ACK" : "NONE");
+
+  if (ackAt29)
+  {
+    stairSensor = new SFEVL53L1X();
+
+    if (stairSensor == nullptr)
+    {
+      Serial.println("[HOTPLUG] VL53L1X 객체 메모리 할당 실패");
+      return STAIR_INIT_VERIFIED_AT_29_BUT_FAILED;
+    }
+
+    Serial.println("[HOTPLUG] 2순위: VL53L1X 0x29에서 begin() 1회 시도");
+
+    int beginResult = (int)stairSensor->begin();
+
+    if (beginResult == 0)
+    {
+      Serial.println("[HOTPLUG] VL53L1X 0x29 begin() 성공 -> 0x30으로 변경");
+
+      stairSensor->setI2CAddress(VL53L1X_NEW_ADDR);
+      delay(150);
+
+      // 주소 변경 후에는 checkID()를 우선 사용한다.
+      // ACK 스캔은 참고용으로만 출력한다.
+      bool idAt30 = stairSensor->checkID();
+      bool scan29 = i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7);
+      bool scan30 = i2cDevicePresent(VL53L1X_NEW_ADDR_7);
+
+      Serial.printf("[HOTPLUG] 0x29 -> 0x30 변경 후: checkID=%s, scan29=%s, scan30=%s\n",
+                    idAt30 ? "OK" : "FAIL",
+                    scan29 ? "ACK" : "NONE",
+                    scan30 ? "ACK" : "NONE");
+
+      if (idAt30)
+      {
+        stairSensor->setDistanceModeShort();
+        stairSensor->setTimingBudgetInMs(50);
+        stairSensor->setIntermeasurementPeriod(HCSR04_SAMPLE_INTERVAL);
+        stairSensor->startRanging();
+
+        resetStairDetectionState();
+        stairSensorReady = true;
+        stairMissCount = 0;
+
+        Serial.println("[HOTPLUG] VL53L1X 0x29 -> 0x30 변경 및 복구 성공");
+        return STAIR_INIT_OK;
+      }
+
+      Serial.println("[HOTPLUG] begin()은 성공했지만 0x30 checkID() 실패");
+    }
+    else
+    {
+      Serial.printf("[HOTPLUG] VL53L1X 0x29 begin() 실패: %d\n", beginResult);
+    }
+
+    destroyStairSensorObject();
+
+    // 0x29가 남아 있는 동안 L5CX를 다시 올리면 주소 충돌 가능성이 있으므로 격리 유지.
+    return STAIR_INIT_VERIFIED_AT_29_BUT_FAILED;
+  }
+
+  // 0x29가 없고 0x30 직접 접속도 실패했다면
+  // 아직 센서 미연결 또는 접점/전원 불안정 상태로 본다.
+  if (ackAt30)
+  {
+    Serial.println("[HOTPLUG] 스캔상 0x30 ACK는 있으나 직접 checkID 실패 -> 다음 주기에 다시 0x30부터 시도");
+    return STAIR_INIT_FAILED_NO_CONFLICT;
+  }
+
+  Serial.println("[HOTPLUG] VL53L1X 미검출 -> 다음 주기에 다시 0x30 직접 접속부터 시도");
+  return STAIR_INIT_ABSENT;
+}
+
+bool initializeVL53L5CXNormal()
+{
+  Serial.println("VL53L5CX 초기화 중... (최대 10초 소요)");
+
+  digitalWrite(VL53L5CX_LPN_PIN, HIGH);
+  tofCommsIsolated = false;
+  delay(200);
+
+  disableCore0WDT();
+  disableCore1WDT();
+
+  bool tofOk = tof.begin();
+
+  enableCore0WDT();
+  enableCore1WDT();
+
+  if (!tofOk)
+  {
+    tofReady = false;
+    resetObstacleDetectionState();
+    Serial.println("VL53L5CX를 찾을 수 없습니다. 장애물 감지만 비활성 상태로 계속 실행합니다.");
+    return false;
+  }
+
+  tof.setResolution(8 * 8);
+  tofZones = tof.getResolution();
+  tof.setRangingFrequency(15);
+  Wire.setClock(400000);
+
+  if (!tof.startRanging())
+  {
+    tofReady = false;
+    resetObstacleDetectionState();
+    Serial.println("VL53L5CX startRanging() 실패 -> 장애물 감지 OFF");
+    return false;
+  }
+
+  resetObstacleDetectionState();
+  tofReady = true;
+  tofMissCount = 0;
+  lastTofFrameTime = millis(); // 첫 프레임이 올 시간을 확보하기 위한 grace 기준
+
+  Serial.printf("VL53L5CX 준비 완료. (존 수: %d)\n", tofZones);
+  Serial.printf("ToF 상/하 필터 적용 행 범위: row %d ~ %d (필요 시 코드 상단 TOF_ROW_MIN/MAX 값 조정)\n",
+                TOF_ROW_MIN, TOF_ROW_MAX);
+  return true;
+}
+
+void markVL53L5CXUnavailable(const char* reason)
+{
+  if (tofReady)
+  {
+    Serial.print("[HOTPLUG] VL53L5CX 장애물 감지 일시 중지: ");
+    Serial.println(reason);
+  }
+
+  tofReady = false;
+  tofMissCount = 0;
+  resetObstacleDetectionState();
+}
+
+// 주소 충돌이 없는 상태에서만 호출한다.
+// 1차: 기존 객체에서 stop/start만 재시도
+// 2차: 그래도 실패하면 begin() 전체 초기화
+bool recoverVL53L5CXAfterCommsFailure()
+{
+  if (tofCommsIsolated)
+  {
+    return false;
+  }
+
+  digitalWrite(VL53L5CX_LPN_PIN, HIGH);
+  delay(30);
+  Wire.setClock(400000);
+
+  // 기존 객체와 펌웨어가 살아 있으면 가장 가벼운 stop/start부터 시도한다.
+  if (tof.isConnected())
+  {
+    tof.stopRanging();
+    delay(10);
+
+    if (tof.startRanging())
+    {
+      tofReady = true;
+      tofMissCount = 0;
+      lastTofFrameTime = millis();
+      Serial.println("[HOTPLUG] VL53L5CX stop/start 복구 성공");
+      return true;
+    }
+  }
+
+  Serial.println("[HOTPLUG] VL53L5CX stop/start 실패 -> begin() 전체 재초기화 시도");
+  return initializeVL53L5CXNormal();
+}
+
+// 실행 중 VL53L1X가 빠졌다 다시 연결되었을 때 복구.
+// 중요: 이 시점에는 재연결된 VL53L1X가 이미 0x29일 수 있으므로
+//       0x29로 I2C 명령(stopRanging 포함)을 보내기 전에 VL53L5CX LPn을 먼저 LOW로 만든다.
+bool recoverVL53L1XHotPlug()
+{
+  // VL53L1X가 빠진 동안 v5는 VL53L5CX를 이미 LPn LOW로 유지한다.
+  // 혹시 다른 경로에서 호출되어도 가장 먼저 LOW로 강제한다.
+  digitalWrite(VL53L5CX_LPN_PIN, LOW);
+  tofCommsIsolated = true;
+  resetObstacleDetectionState();
+
+  Serial.println("[HOTPLUG] VL53L1X 복구 시도 (VL53L5CX LPn LOW 격리 유지)");
+
+  delay(100);
+
+  Serial.printf("[HOTPLUG-DIAG] GPIO25(LPn)=%d, 0x29=%s, 0x30=%s\n",
+                digitalRead(VL53L5CX_LPN_PIN),
+                i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7) ? "ACK" : "NONE",
+                i2cDevicePresent(VL53L1X_NEW_ADDR_7) ? "ACK" : "NONE");
+
+  StairInitResult stairResult = initializeVL53L1XWithL5Disabled();
+
+  // VL53L1X가 아직 정상 0x30으로 복구되지 않았다면
+  // 절대 VL53L5CX를 HIGH로 올리지 않는다.
+  // 이유: 0x29에 VL53L1X가 남아 있는 순간 L5CX를 올리면 즉시 주소 충돌이 재발한다.
+  if (stairResult != STAIR_INIT_OK)
+  {
+    digitalWrite(VL53L5CX_LPN_PIN, LOW);
+    tofCommsIsolated = true;
+    resetObstacleDetectionState();
+
+    if (stairResult == STAIR_INIT_ABSENT)
+    {
+      Serial.println("[HOTPLUG] 계단 센서 미연결 -> 재결합 대기, VL53L5CX I2C는 충돌 방지를 위해 격리 유지");
+    }
+    else if (stairResult == STAIR_INIT_VERIFIED_AT_29_BUT_FAILED)
+    {
+      Serial.println("[HOTPLUG] VL53L1X가 0x29에 남아 있음 -> VL53L5CX 절대 올리지 않고 다음 주기에 재시도");
+    }
+    else
+    {
+      Serial.println("[HOTPLUG] VL53L1X 복구 미완료 -> VL53L5CX 격리 유지 후 다음 주기에 재시도");
+    }
+
+    if (isI2CBusStuckLow())
+    {
+      recoverI2CBusIfStuck();
+    }
+
+    return false;
+  }
+
+  // 여기까지 왔다는 것은 VL53L1X가 정상적으로 0x30에서 살아난 상태.
+  // 이제서야 VL53L5CX를 0x29에 복귀시켜도 주소 충돌이 없다.
+  Serial.println("[HOTPLUG] VL53L1X가 0x30에서 정상 복구됨 -> VL53L5CX I2C 재개");
+
+  digitalWrite(VL53L5CX_LPN_PIN, HIGH);
+  tofCommsIsolated = false;
+  delay(150);
+  Wire.setClock(400000);
+
+  // 기존에 L5CX가 정상 초기화되어 있었다면 LPn은 comms만 막았으므로
+  // 대부분 별도 begin() 없이 다시 통신된다.
+  if (tofReady)
+  {
+    bool connected = false;
+
+    for (int i = 0; i < 3; i++)
+    {
+      if (tof.isConnected())
+      {
+        connected = true;
+        break;
+      }
+      delay(50);
+    }
+
+    if (connected)
+    {
+      tofMissCount = 0;
+      lastTofFrameTime = millis();
+      Serial.println("[HOTPLUG] VL53L5CX I2C 통신 재개 성공 (기존 ranging 유지)");
+    }
+    else
+    {
+      Serial.println("[HOTPLUG] VL53L5CX 재개 후 응답 없음 -> 이제 주소 충돌이 없으므로 안전하게 전체 복구");
+      markVL53L5CXUnavailable("LPn HIGH 후 응답 없음");
+      recoverVL53L5CXAfterCommsFailure();
+    }
+  }
+  else
+  {
+    // 부팅 당시 계단 센서가 없어서 L5CX를 아예 초기화하지 않았던 경우
+    initializeVL53L5CXNormal();
+  }
+
+  Serial.println("[HOTPLUG] 계단 센서 재결합 복구 성공");
+  return true;
+}
+
+void markStairSensorDisconnected()
+{
+  if (!stairSensorReady) return;
+
+  stairSensorReady = false;
+  stairMissCount = 0;
+  resetStairDetectionState();
+  destroyStairSensorObject();
+
+  // 재결합 순간 0x29 충돌 방지를 위해 VL53L5CX를 미리 격리한다.
+  digitalWrite(VL53L5CX_LPN_PIN, LOW);
+  tofCommsIsolated = true;
+  resetObstacleDetectionState();
+
+  // v7: 바로 복구하지 않는다.
+  // 포고핀/전원 접점이 완전히 안정될 시간을 먼저 준다.
+  stairDisconnectedAtTime = millis();
+  stairRecoveryCooldownUntil = 0;
+  resetStairAddressObservation();
+
+  Serial.println("[HOTPLUG] VL53L1X 분리 감지 -> 계단 감지 OFF");
+  Serial.println("[HOTPLUG] VL53L5CX LPn LOW 격리");
+  Serial.println("[HOTPLUG] 재결합 후 최소 3초 안정화 + 주소 5회 연속 확인 후 복구합니다.");
+}
+
+// loop()에서 계속 호출. 실제 I2C health check는 500ms마다만 수행한다.
+void checkSensorHotPlugRecovery()
+{
+  unsigned long now = millis();
+
+  if (now - lastSensorHealthCheckTime < SENSOR_HEALTH_CHECK_INTERVAL_MS)
+  {
+    return;
+  }
+  lastSensorHealthCheckTime = now;
+
+  // ---------- MPU6050 ----------
+  bool mpuPresentNow = i2cDevicePresent(MPU6050_ADDR_7);
+
+  if (mpuReady)
+  {
+    if (!mpuPresentNow)
+    {
+      mpuMissCount++;
+      if (mpuMissCount >= SENSOR_MISS_LIMIT)
+      {
+        markMPUDisconnected();
+        if (isI2CBusStuckLow()) recoverI2CBusIfStuck();
+      }
+    }
+    else
+    {
+      mpuMissCount = 0;
+    }
+  }
+  else if (mpuPresentNow)
+  {
+    Serial.println("[HOTPLUG] MPU6050 재연결 감지 -> 재초기화 시도");
+    if (initializeMPU6050HotPlug())
+    {
+      // MPU가 먼저 살아나더라도 VL53L1X는 별도의 안정화/주소 관찰 시간을 그대로 지킨다.
+    }
+    else if (isI2CBusStuckLow())
+    {
+      recoverI2CBusIfStuck();
+    }
+  }
+
+  // ---------- VL53L1X (정상 주소 0x30일 때만 직접 health check 가능) ----------
+  if (stairSensorReady)
+  {
+    bool stairPresentNow = i2cDevicePresent(VL53L1X_NEW_ADDR_7);
+
+    if (!stairPresentNow)
+    {
+      stairMissCount++;
+      if (stairMissCount >= SENSOR_MISS_LIMIT)
+      {
+        markStairSensorDisconnected();
+        lastStairRecoveryAttemptTime = 0;
+        if (isI2CBusStuckLow()) recoverI2CBusIfStuck();
+      }
+    }
+    else
+    {
+      stairMissCount = 0;
+    }
+  }
+
+  // ---------- VL53L5CX ----------
+  // VL53L1X가 0x30에 정상적으로 있을 때는 0x29가 확실히 VL53L5CX이므로 주소 ping도 사용할 수 있다.
+  if (tofReady && !tofCommsIsolated && stairSensorReady)
+  {
+    bool tofPresentNow = i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7); // 0x29
+    if (!tofPresentNow)
+    {
+      tofMissCount++;
+      if (tofMissCount >= SENSOR_MISS_LIMIT)
+      {
+        markVL53L5CXUnavailable("0x29 응답 없음");
+        if (isI2CBusStuckLow()) recoverI2CBusIfStuck();
+      }
+    }
+    else
+    {
+      tofMissCount = 0;
+    }
+  }
+
+  // 주소 ping만으로는 hot-plug된 VL53L1X(0x29)와 VL53L5CX(0x29)를 구분할 수 없으므로
+  // 실제 ranging frame이 일정 시간 안 들어오는지도 별도로 본다.
+  if (tofReady && !tofCommsIsolated && lastTofFrameTime > 0 &&
+      now - lastTofFrameTime > TOF_NO_FRAME_TIMEOUT_MS)
+  {
+    markVL53L5CXUnavailable("2초 이상 ranging frame 없음");
+    if (isI2CBusStuckLow()) recoverI2CBusIfStuck();
+  }
+
+  // ---------- VL53L1X 재연결 탐색 ----------
+  // v7는 빠른 반복 초기화를 하지 않는다.
+  // 1) 분리/부팅 실패 후 최소 3초 대기
+  // 2) 400ms 간격으로 주소 관찰
+  // 3) 같은 주소가 5회 연속 안정적으로 보일 때만 초기화
+  // 4) 실패하면 5초 cooldown 후 다시 주소 안정성 관찰부터 시작
+  if (!stairSensorReady)
+  {
+    // 주소 충돌 방지를 위해 관찰/복구가 끝날 때까지 L5CX는 계속 격리
+    if (!tofCommsIsolated)
+    {
+      digitalWrite(VL53L5CX_LPN_PIN, LOW);
+      tofCommsIsolated = true;
+      resetObstacleDetectionState();
+    }
+
+    if (stairDisconnectedAtTime == 0)
+    {
+      stairDisconnectedAtTime = now;
+      resetStairAddressObservation();
+    }
+
+    // 이전 초기화 실패 후 cooldown 중
+    if (stairRecoveryCooldownUntil != 0 &&
+        (long)(now - stairRecoveryCooldownUntil) < 0)
+    {
+      // 아직 기다리는 중
+    }
+    else if (now - stairDisconnectedAtTime >= STAIR_RECONNECT_SETTLE_MS &&
+             (stairLastAddressSampleTime == 0 ||
+              now - stairLastAddressSampleTime >= STAIR_ADDR_SAMPLE_INTERVAL_MS))
+    {
+      stairLastAddressSampleTime = now;
+
+      bool at29 = i2cDevicePresent(VL53L1X_DEFAULT_ADDR_7);
+      bool at30 = i2cDevicePresent(VL53L1X_NEW_ADDR_7);
+
+      // 0x30 우선.
+      // 다만 두 주소가 동시에 ACK면 상태가 애매하므로 카운트를 모두 초기화하고 더 기다린다.
+      if (at30 && !at29)
+      {
+        stairStable30Count++;
+        stairStable29Count = 0;
+
+        Serial.printf("[HOTPLUG-WAIT] 0x30 안정성 확인 %u/%u\n",
+                      stairStable30Count, STAIR_ADDR_STABLE_REQUIRED);
+      }
+      else if (at29 && !at30)
+      {
+        stairStable29Count++;
+        stairStable30Count = 0;
+
+        Serial.printf("[HOTPLUG-WAIT] 0x29 안정성 확인 %u/%u\n",
+                      stairStable29Count, STAIR_ADDR_STABLE_REQUIRED);
+      }
+      else if (at29 && at30)
+      {
+        stairStable29Count = 0;
+        stairStable30Count = 0;
+        Serial.println("[HOTPLUG-WAIT] 0x29/0x30 동시 ACK -> 아직 불안정, 초기화하지 않고 더 기다림");
+      }
+      else
+      {
+        // 둘 다 없으면 아직 센서 미연결 또는 접점 안정화 중
+        if (stairStable29Count != 0 || stairStable30Count != 0)
+        {
+          Serial.println("[HOTPLUG-WAIT] 주소 응답 사라짐 -> 안정성 카운트 초기화");
+        }
+        stairStable29Count = 0;
+        stairStable30Count = 0;
+      }
+
+      bool stable30 = stairStable30Count >= STAIR_ADDR_STABLE_REQUIRED;
+      bool stable29 = stairStable29Count >= STAIR_ADDR_STABLE_REQUIRED;
+
+      if (stable30 || stable29)
+      {
+        Serial.printf("[HOTPLUG] 주소 안정 확인 완료 -> %s 우선 복구 시작\n",
+                      stable30 ? "0x30" : "0x29");
+
+        lastStairRecoveryAttemptTime = now;
+        resetStairAddressObservation();
+
+        bool recovered = recoverVL53L1XHotPlug();
+
+        if (recovered)
+        {
+          stairDisconnectedAtTime = 0;
+          stairRecoveryCooldownUntil = 0;
+        }
+        else
+        {
+          // 실패했다고 바로 begin()을 연속 호출하지 않는다.
+          stairRecoveryCooldownUntil = millis() + STAIR_RECOVERY_RETRY_INTERVAL_MS;
+          stairDisconnectedAtTime = millis();
+          resetStairAddressObservation();
+
+          Serial.printf("[HOTPLUG] 복구 실패 -> %lu ms 쉬고 주소 안정성부터 다시 관찰\n",
+                        STAIR_RECOVERY_RETRY_INTERVAL_MS);
+        }
+      }
+    }
+  }
+
+  // ---------- VL53L5CX 독립 복구 ----------
+  // VL53L1X가 정상 0x30에 있으면 주소 충돌이 없으므로 stop/start -> begin fallback을 안전하게 수행 가능.
+  if (!tofReady && !tofCommsIsolated && stairSensorReady &&
+      (lastTofRecoveryAttemptTime == 0 ||
+       now - lastTofRecoveryAttemptTime >= TOF_RECOVERY_RETRY_INTERVAL_MS))
+  {
+    lastTofRecoveryAttemptTime = now;
+    recoverVL53L5CXAfterCommsFailure();
+  }
+}
+
+// ======================================================
 // 낙상 확정 시 알림
 // ======================================================
 
@@ -539,6 +1403,13 @@ void debugPrintTofRows(VL53L5CX_ResultsData &data)
 
 bool readToFDistances(float &outLeftCM, float &outRightCM)
 {
+  // VL53L1X가 빠진 동안에는 0x29 충돌 방지를 위해 VL53L5CX의 LPn을 LOW로 유지한다.
+  // 이때는 VL53L5CX I2C에 절대 접근하지 않는다.
+  if (!tofReady || tofCommsIsolated)
+  {
+    return false;
+  }
+
   if (!tof.isDataReady())
   {
     return false;
@@ -549,6 +1420,10 @@ bool readToFDistances(float &outLeftCM, float &outRightCM)
   {
     return false;
   }
+
+  // 실제 ranging frame을 정상 수신한 시각 기록 (VL53L5CX health 감시용)
+  lastTofFrameTime = millis();
+  tofMissCount = 0;
 
   // debugPrintTofRows(measurementData);
 
@@ -677,13 +1552,18 @@ void checkObstacle()
 
 float readVL53L1XDistanceCM()
 {
-  if (!stairSensor.checkForDataReady())
+  if (!stairSensorReady || stairSensor == nullptr)
   {
     return -1.0f;
   }
 
-  int distMm = stairSensor.getDistance();
-  stairSensor.clearInterrupt();
+  if (!stairSensor->checkForDataReady())
+  {
+    return -1.0f;
+  }
+
+  int distMm = stairSensor->getDistance();
+  stairSensor->clearInterrupt();
 
   return distMm / 10.0f;
 }
@@ -775,7 +1655,11 @@ void printStairDistance()
   }
   lastStairPrintTime = now;
 
-  if (lastStairDistanceCM >= 0)
+  if (!stairSensorReady)
+  {
+    Serial.println("[계단 ToF] 센서 미연결/복구 대기 중");
+  }
+  else if (lastStairDistanceCM >= 0)
   {
     Serial.printf("[계단 ToF] 거리: %.1f cm (임계값: %.1f cm, 상태: %s)\n",
                   lastStairDistanceCM,
@@ -1016,7 +1900,7 @@ void setup()
   Serial.println("Pi5 UART2 초기화 완료 (RX=16, TX=17, 115200)");
 
   // ---- I2C 공용 버스 초기화 (MPU6050 + VL53L5CX + VL53L1X) ----
-  Wire.begin(21, 22);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   Wire.setClock(100000);
   delay(100);
 
@@ -1025,82 +1909,47 @@ void setup()
   digitalWrite(VL53L5CX_LPN_PIN, LOW);
   delay(100);
 
-  // ---- MPU6050 초기화 ----
-  if (!mpu.begin())
+  // ---- MPU6050 초기화 (없어도 ESP32 전체는 계속 실행) ----
+  if (!initializeMPU6050HotPlug())
   {
-    Serial.println("MPU6050를 찾을 수 없습니다. 배선을 확인하세요.");
-    while (1) delay(100);
+    Serial.println("MPU6050 미연결 -> 낙상 감지 OFF, 재연결을 자동 감시합니다.");
   }
 
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
-
-  Serial.println("MPU6050 준비 완료.");
-
-  // ---- VL53L1X 초기화 (계단용) ----
+  // ---- VL53L1X 초기화 (VL53L5CX는 현재 LPn LOW 상태) ----
   Serial.println("VL53L1X(계단) 초기화 중...");
+  StairInitResult bootStairResult = initializeVL53L1XWithL5Disabled();
 
-  int vl53l1xInitResult = stairSensor.begin();
-  Serial.printf("VL53L1X begin() 1차 시도(주소 0x29) 반환값: %d\n", vl53l1xInitResult);
-
-  if (vl53l1xInitResult != 0)
+  if (bootStairResult == STAIR_INIT_OK)
   {
-    Serial.println("0x29에서 실패 -> 이전 세션에서 0x30으로 재할당된 상태로 추정, 0x30으로 재시도...");
-
-    stairSensor.setI2CAddress(VL53L1X_NEW_ADDR);
-
-    if (!stairSensor.checkID())
-    {
-      Serial.println("VL53L1X를 찾을 수 없습니다. (0x29, 0x30 모두 실패)");
-      Serial.println("배선 확인: SDA=21, SCL=22, VCC=3.3V, GND / 그래도 안 되면 전원을 완전히 껐다 켜보세요.");
-      while (1) delay(100);
-    }
-
-    stairSensor.init();
-    Serial.println("0x30에서 VL53L1X 통신 성공.");
+    // VL53L1X가 0x30에 정상적으로 자리잡은 뒤에만 VL53L5CX(0x29)를 올린다.
+    initializeVL53L5CXNormal();
   }
   else
   {
-    stairSensor.setI2CAddress(VL53L1X_NEW_ADDR);
-    delay(50);
+    stairSensorReady = false;
+    tofReady = false;
+
+    // 부팅 시에도 VL53L1X가 없다면 L5CX를 LOW로 유지한다.
+    // 그래야 나중에 VL53L1X를 꽂는 순간 기본주소 0x29 충돌이 생기지 않는다.
+    digitalWrite(VL53L5CX_LPN_PIN, LOW);
+    tofCommsIsolated = true;
+    resetObstacleDetectionState();
+
+    if (bootStairResult == STAIR_INIT_ABSENT)
+    {
+      Serial.println("VL53L1X 미연결 -> 계단 감지 OFF, 재연결 자동 감시");
+    }
+    else
+    {
+      Serial.println("VL53L1X 초기화 미완료 -> 재복구 자동 시도");
+    }
+
+    Serial.println("VL53L5CX는 0x29 충돌 방지를 위해 LPn LOW 대기 (VL53L1X 복구 후 자동 시작)");
+    stairDisconnectedAtTime = millis();
+    stairRecoveryCooldownUntil = 0;
+    resetStairAddressObservation();
+
   }
-
-  stairSensor.setDistanceModeShort();
-  stairSensor.setTimingBudgetInMs(50);
-  stairSensor.setIntermeasurementPeriod(HCSR04_SAMPLE_INTERVAL);
-  stairSensor.startRanging();
-
-  Serial.println("VL53L1X 준비 완료. (주소=0x30)");
-
-  // ---- VL53L5CX 초기화 ----
-  Serial.println("VL53L5CX 초기화 중... (최대 10초 소요)");
-  digitalWrite(VL53L5CX_LPN_PIN, HIGH);
-  delay(200);
-
-  disableCore0WDT();
-  disableCore1WDT();
-
-  bool tofOk = tof.begin();
-
-  enableCore0WDT();
-  enableCore1WDT();
-
-  if (tofOk == false)
-  {
-    Serial.println("VL53L5CX를 찾을 수 없습니다. 배선/전원을 확인하세요.");
-    while (1) delay(100);
-  }
-
-  tof.setResolution(8 * 8);
-  tofZones = tof.getResolution();
-  tof.setRangingFrequency(15);
-  Wire.setClock(400000);
-  tof.startRanging();
-
-  Serial.printf("VL53L5CX 준비 완료. (존 수: %d)\n", tofZones);
-  Serial.printf("ToF 상/하 필터 적용 행 범위: row %d ~ %d (필요 시 코드 상단 TOF_ROW_MIN/MAX 값 조정)\n",
-                TOF_ROW_MIN, TOF_ROW_MAX);
 
   // ---- BLE 서버 초기화 ----
   initializeBluetooth();
@@ -1114,7 +1963,8 @@ void loop()
 {
   unsigned long currentTime = millis();
 
-  if (currentTime - lastAccelSampleTime >= ACCEL_SAMPLE_INTERVAL)
+  // 분절부가 빠진 동안에는 해당 센서 함수를 호출하지 않는다.
+  if (mpuReady && currentTime - lastAccelSampleTime >= ACCEL_SAMPLE_INTERVAL)
   {
     lastAccelSampleTime = currentTime;
 
@@ -1129,8 +1979,17 @@ void loop()
     checkFall(accelMag);
   }
 
-  checkObstacle();
-  checkStairs();
+  checkSensorHotPlugRecovery();
+
+  if (tofReady)
+  {
+    checkObstacle();
+  }
+
+  if (stairSensorReady)
+  {
+    checkStairs();
+  }
   checkButton();
   checkPiUart();
   printStairDistance();
