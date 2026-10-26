@@ -1,0 +1,4 @@
+Claude: HIGH remaining at timeout is classified as normal NoObstacle
+Claude: 119/125/119cm triggers despite nonconsecutive below-120 samples
+Claude: impact at 601ms after freefall is accepted as a fall sequence
+Claude: stair alert keeps central motor ON during the fall pattern OFF interval

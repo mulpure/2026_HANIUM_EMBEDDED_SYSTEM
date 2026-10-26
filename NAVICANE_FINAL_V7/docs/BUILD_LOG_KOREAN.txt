@@ -1,0 +1,191 @@
+NAVCANE v4.1 한국어 진단 보완 / PlatformIO esp32dev 빌드 결과
+명령: pio_env/bin/pio run -d NAVCANE_Integrated_v4
+아래는 빌드 도구 설치 완료 전후부터 실제 컴파일·링크·용량 확인까지의 출력입니다.
+
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-esptoolpy@1.40501.0 has been installed!
+Tool Manager: Installing platformio/tool-scons @ ~4.41101.0
+Downloading 0% 10%
+Tool Manager: Warning! Package Mirror: The checksum '5b131ca14aa96311d3432b0062c7443d3b0e6346ec279bd376a75f0a76bcd5d7' of the downloaded file 'tool-scons-4.41101.0.tar.gz' does not match to the remote 'e405de1fcd3307fa80d624f0290c7cd30fbb47f67e135a9f56d7e46b6b895311'
+Tool Manager: Looking for another mirror...
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-scons@4.41101.0 has been installed!
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32dev.html
+PLATFORM: Espressif 32 (6.9.0) > Espressif ESP32 Dev Module
+HARDWARE: ESP32 240MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 3.20017.241212+sha.dcc1105b 
+ - tool-esptoolpy @ 1.40501.0 (4.5.1) 
+ - toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch5
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 36 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- MFRC522 @ 1.4.11
+|-- ESP32 BLE Arduino @ 2.0.0
+|-- SPI @ 2.0.0
+|-- LittleFS @ 2.0.0
+|-- SparkFun VL53L5CX Arduino Library @ 1.0.3
+|-- Wire @ 2.0.0
+|-- STM32duino VL53L4CX @ 1.1.0
+Building in release mode
+Compiling .pio/build/esp32dev/src/ble_link.cpp.o
+Compiling .pio/build/esp32dev/src/expansion.cpp.o
+Compiling .pio/build/esp32dev/src/feedback.cpp.o
+Compiling .pio/build/esp32dev/src/main.cpp.o
+Compiling .pio/build/esp32dev/src/profiles.cpp.o
+Compiling .pio/build/esp32dev/src/sensors.cpp.o
+Building .pio/build/esp32dev/bootloader.bin
+Generating partitions .pio/build/esp32dev/partitions.bin
+Compiling .pio/build/esp32dev/liba96/SPI/SPI.cpp.o
+esptool.py v4.5.1
+Creating esp32 image...
+Merged 1 ELF section
+Successfully created esp32 image.
+Compiling .pio/build/esp32dev/lib977/MFRC522/MFRC522.cpp.o
+Compiling .pio/build/esp32dev/lib977/MFRC522/MFRC522Extended.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLE2902.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLE2904.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEAddress.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEAdvertisedDevice.cpp.o
+Archiving .pio/build/esp32dev/liba96/libSPI.a
+Indexing .pio/build/esp32dev/liba96/libSPI.a
+Compiling .pio/build/esp32dev/lib079/BLE/BLEAdvertising.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEBeacon.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLECharacteristic.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLECharacteristicMap.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEClient.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEDescriptor.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEDescriptorMap.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEDevice.cpp.o
+Archiving .pio/build/esp32dev/lib977/libMFRC522.a
+Indexing .pio/build/esp32dev/lib977/libMFRC522.a
+Compiling .pio/build/esp32dev/lib079/BLE/BLEEddystoneTLM.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEEddystoneURL.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEExceptions.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEHIDDevice.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLERemoteCharacteristic.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLERemoteDescriptor.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLERemoteService.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEScan.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLESecurity.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEServer.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEService.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEServiceMap.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEUUID.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEUtils.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/BLEValue.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/FreeRTOS.cpp.o
+Compiling .pio/build/esp32dev/lib079/BLE/GeneralUtils.cpp.o
+Compiling .pio/build/esp32dev/lib790/FS/FS.cpp.o
+Compiling .pio/build/esp32dev/lib790/FS/vfs_api.cpp.o
+Compiling .pio/build/esp32dev/lib241/LittleFS/LittleFS.cpp.o
+Compiling .pio/build/esp32dev/lib767/Wire/Wire.cpp.o
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/SparkFun_VL53L5CX_IO.cpp.o
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/SparkFun_VL53L5CX_Library.cpp.o
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/platform.cpp.o
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/vl53l5cx_api.cpp.o
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/vl53l5cx_plugin_detection_thresholds.cpp.o
+Archiving .pio/build/esp32dev/lib079/libBLE.a
+Indexing .pio/build/esp32dev/lib079/libBLE.a
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/vl53l5cx_plugin_motion_indicator.cpp.o
+Archiving .pio/build/esp32dev/lib241/libLittleFS.a
+Indexing .pio/build/esp32dev/lib241/libLittleFS.a
+Compiling .pio/build/esp32dev/lib682/SparkFun_VL53L5CX/vl53l5cx_plugin_xtalk.cpp.o
+Archiving .pio/build/esp32dev/lib790/libFS.a
+Indexing .pio/build/esp32dev/lib790/libFS.a
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_api.cpp.o
+Archiving .pio/build/esp32dev/lib767/libWire.a
+Indexing .pio/build/esp32dev/lib767/libWire.a
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_api_calibration.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_api_core.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_api_debug.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_api_preset_modes.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_class.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_core.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_core_support.cpp.o
+Archiving .pio/build/esp32dev/lib682/libSparkFun_VL53L5CX.a
+Indexing .pio/build/esp32dev/lib682/libSparkFun_VL53L5CX.a
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_dmax.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_hist_algos_gen3.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_hist_algos_gen4.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_hist_char.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_hist_core.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_hist_funcs.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_nvm.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_platform_ipp.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_register_funcs.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_sigma_estimate.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_silicon_core.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_wait.cpp.o
+Compiling .pio/build/esp32dev/lib956/VL53L4CX/vl53l4cx_xtalk.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/Esp.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/FirmwareMSC.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/FunctionalInterrupt.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/HWCDC.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/HardwareSerial.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/IPAddress.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/IPv6Address.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/MD5Builder.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/Print.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/Stream.cpp.o
+Archiving .pio/build/esp32dev/lib956/libVL53L4CX.a
+Indexing .pio/build/esp32dev/lib956/libVL53L4CX.a
+Compiling .pio/build/esp32dev/FrameworkArduino/StreamString.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/Tone.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/USB.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/USBCDC.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/USBMSC.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/WMath.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/WString.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/base64.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/cbuf.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-adc.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-bt.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-cpu.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-dac.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-gpio.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-i2c-slave.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-i2c.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-ledc.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-matrix.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-misc.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-psram.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-rgb-led.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-rmt.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-sigmadelta.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-spi.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-time.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-timer.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-tinyusb.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-touch.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/esp32-hal-uart.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/firmware_msc_fat.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/libb64/cdecode.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/libb64/cencode.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/main.cpp.o
+Compiling .pio/build/esp32dev/FrameworkArduino/stdlib_noniso.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/wiring_pulse.c.o
+Compiling .pio/build/esp32dev/FrameworkArduino/wiring_shift.c.o
+Archiving .pio/build/esp32dev/libFrameworkArduino.a
+Indexing .pio/build/esp32dev/libFrameworkArduino.a
+Linking .pio/build/esp32dev/firmware.elf
+Retrieving maximum program size .pio/build/esp32dev/firmware.elf
+Checking size .pio/build/esp32dev/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  19.7% (used 64628 bytes from 327680 bytes)
+Flash: [=======   ]  70.2% (used 1380025 bytes from 1966080 bytes)
+Building .pio/build/esp32dev/firmware.bin with action:
+  "$PYTHONEXE" "$OBJCOPY" --chip esp32 elf2image --flash_mode ${__get_board_flash_mode(__env__)} --flash_freq ${__get_board_f_image(__env__)} --flash_size 4MB --elf-sha256-offset 0xb0 -o $TARGET $SOURCES
+Building .pio/build/esp32dev/firmware.bin
+esptool.py v4.5.1
+Creating esp32 image...
+Merged 27 ELF sections
+Successfully created esp32 image.
+======================== [SUCCESS] Took 491.85 seconds ========================
+
