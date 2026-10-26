@@ -1,0 +1,7 @@
+main: no duplicate expansion fault, base sensor warning, 599/600ms freshness, Korean stair events and status sync PASS
+logic: obstacle recovery/backoff/wrap, ID, detach, debounce, stair and fall PASS
+driver transport: long transfers, NACK, short reads/writes PASS
+profiles: app CFG/REG/APPLY, errors, timeout, session cleanup, short write, CRC, rename failure, mount protection PASS
+expansion: confirmed upper clearing, held warning distance, stale/fault release, far recovery, slot high-Z and reset-free resume PASS
+BLE: framing, fall priority, 5min expiry/offline/CCCD/wrap/replacement, epochs and input limits PASS
+feedback: silent faults, uninterrupted green/fall, upper both-sides, stair caution, retained brake and pattern completion PASS

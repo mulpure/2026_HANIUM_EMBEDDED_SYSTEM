@@ -1,0 +1,96 @@
+diff -ru GPT_v3/src/ble_link.cpp src/ble_link.cpp
+--- GPT_v3/src/ble_link.cpp	2026-10-02 07:52:21.663785715 +0000
++++ src/ble_link.cpp	2026-10-02 07:52:21.688173502 +0000
+@@ -15,6 +15,7 @@
+ std::atomic<uint16_t> mtu{23};
+ std::atomic<bool> fallPending{false}, streamMode{false};
+ std::atomic<uint32_t> rxEpoch{0};
++std::atomic<uint32_t> fallAt{0};   // [CLAUDE]
+ uint32_t advertiseAt = 0;
+ void queueCommand(const String &s) {
+   if (!s.length()) return;
+@@ -82,7 +83,7 @@
+ }
+ void sendMessage(const String &s) {
+   Serial.println("[EVENT] " + s);
+-  if (s == "FALL_DETECTED") { fallPending = true; return; }
++  if (s == "FALL_DETECTED") { fallAt = millis(); fallPending = true; return; }
+   if (!connected || !txQueue || !cccd || !cccd->getNotifications()) return;
+   if (s.length() > MAX_LINE-1) { Serial.println("[BLE] outgoing line too long"); return; }
+   Line line = {}; line.epoch=rxEpoch.load(); String framed = s;
+@@ -120,7 +121,11 @@
+     characteristic->notify(); lastSend=millis();
+   };
+   // This 14-byte event fits even MTU 23. A long status can never block it.
+-  if (offset==0 && fallPending.exchange(false)) { notify("FALL_DETECTED\n"); return; }
++  // [CLAUDE] 끊긴 동안의 낙상은 10분 안에 재연결될 때만 전달 (오래된 낙상이 현재 위치로 보호자에게 가는 것 방지)
++  if (offset==0 && fallPending.exchange(false)) {
++    if (uint32_t(millis()-fallAt.load()) <= cfg::FALL_PENDING_MAX_MS) { notify("FALL_DETECTED\n"); return; }
++    Serial.println("[BLE] FALL_DETECTED older than 10 min dropped");
++  }
+   if (current.text[0] && current.epoch!=rxEpoch.load()) { current.text[0]='\0'; offset=0; }
+   while (!current.text[0]) {
+     if (xQueueReceive(txQueue,&current,0)!=pdTRUE) return;
+diff -ru GPT_v3/src/main.cpp src/main.cpp
+--- GPT_v3/src/main.cpp	2026-10-02 07:52:21.663434997 +0000
++++ src/main.cpp	2026-10-02 07:52:21.687896736 +0000
+@@ -61,7 +61,7 @@
+   sendMessage(String("SENSOR:PROFILE_STORE:")+(profilesStoreReady() ? "READY" : "FAULT"));
+   sendMessage(String("SENSOR:ULTRASONIC:")+expansionEchoState());
+   sendMessage(expansionUpperAlert() ? "OBSTACLE:UPPER" : "OBSTACLE:UPPER_CLEAR");
+-  if (stairAlert) sendMessage("STAIR_DETECTED");
++  if (stairAlert) sendMessage("계단 감지");   // [CLAUDE] 사용자 결정: 한글 유지
+   else sendMessage("STAIR_CLEARED");
+   sendMessage("MPU_MAX_GAP_MS:"+String(sensors.maxAccelGapMs));
+   sentObstacle = 0xFF; obstacleEventAt = millis()-300;
+@@ -136,7 +136,7 @@
+   }
+   stairAlert = stairDecision.alert;
+   if (stairAlert != sentStair) {
+-    sentStair=stairAlert; sendMessage(stairAlert ? "STAIR_DETECTED" : "STAIR_CLEARED");
++    sentStair=stairAlert; sendMessage(stairAlert ? "계단 감지" : "STAIR_CLEARED");   // [CLAUDE]
+   }
+   leftCm = obstacleUsable ? sensors.leftCm : -1;
+   rightCm = obstacleUsable ? sensors.rightCm : -1;
+@@ -152,7 +152,8 @@
+     healthAt=now;
+     uint8_t mask = faultMask();
+     if (mask != previousHealth) {
+-      if (previousHealth != 0xFF && (mask & ~previousHealth & 0x0F)) feedbackStart(Feedback::Fault);
++      // [CLAUDE] 확장모듈 고장(bit 3)은 expansion.cpp가 이미 진동하므로 센서 3개만 (진동 중복 방지)
++      if (previousHealth != 0xFF && (mask & ~previousHealth & 0x07)) feedbackStart(Feedback::Fault);
+       previousHealth = mask;
+       sendMessage("SENSOR:MPU:"+String(mpuUsable ? "READY" : "FAULT"));
+       sendMessage("SENSOR:STAIR:"+String(stairUsable ? "READY" : "FAULT"));
+diff -ru GPT_v3/src/sensors.cpp src/sensors.cpp
+--- GPT_v3/src/sensors.cpp	2026-10-02 07:52:21.663567814 +0000
++++ src/sensors.cpp	2026-10-02 07:52:21.687500822 +0000
+@@ -271,8 +271,10 @@
+         at = millis(); ++seq; publishObstacle(true, leftMean.sample(left), rightMean.sample(right), at, seq);
+       }
+     }
+-    if (ready && nav::elapsed(millis(), at, cfg::OBSTACLE_STALE_MS)) {
+-      ready = false; retry=millis(); publishObstacle(false, -1, -1, at, seq);
++    // [CLAUDE] 기존 펌웨어 기준: 2.5초 무프레임이면 바로 재초기화. 5초 대기는 초기화 실패 후에만 적용
++    // (메인 루프는 OBSTACLE_STALE_MS(600ms) 지난 데이터를 이미 사용하지 않음)
++    if (ready && nav::elapsed(millis(), at, cfg::OBSTACLE_REINIT_MS)) {
++      ready = false; retry = millis() - cfg::SENSOR_RETRY_MS; publishObstacle(false, -1, -1, at, seq);
+     }
+     vTaskDelay(pdMS_TO_TICKS(5));
+   }
+Only in test: NavcaneProtocolTest.kt
+diff -ru GPT_v3/test/test_ble.cpp test/test_ble.cpp
+--- GPT_v3/test/test_ble.cpp	2026-10-02 07:52:21.664319442 +0000
++++ test/test_ble.cpp	2026-10-02 07:52:21.688367553 +0000
+@@ -43,5 +43,11 @@
+   server->callbacks->onDisconnect(server); tick();
+   write("CFG,BAD,80,"); connect(); write("REG\n");
+   assert(blePopCommand(command) && command=="REG");
++  // [CLAUDE] 끊긴 동안의 낙상: 10분 이내 재연결이면 전달, 넘으면 폐기
++  server->callbacks->onDisconnect(server); tick(); sendMessage("FALL_DETECTED");
++  fakeMillis+=cfg::FALL_PENDING_MAX_MS-1000; connect(); tick(); assert(fakeNotifications.back()=="FALL_DETECTED\n");
++  server->callbacks->onDisconnect(server); tick(); sendMessage("FALL_DETECTED"); size_t n=fakeNotifications.size();
++  fakeMillis+=cfg::FALL_PENDING_MAX_MS+1000; connect(); tick(); tick();
++  for(size_t i=n;i<fakeNotifications.size();++i) assert(fakeNotifications[i]!="FALL_DETECTED\n");
+   puts("BLE: app commands, one-notify UTF8, MTU23/185, opt-in framing, fall priority, epochs and oversized input PASS");
+ }
